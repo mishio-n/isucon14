@@ -661,21 +661,23 @@ type appGetNotificationResponseChairStats struct {
 }
 
 type RideNotification struct {
-    ID                   string         `db:"id"`
-    UserID               string         `db:"user_id"`
-    ChairID              sql.NullString `db:"chair_id"`
-    PickupLatitude       int            `db:"pickup_latitude"`
-    PickupLongitude      int            `db:"pickup_longitude"`
-    DestinationLatitude  int            `db:"destination_latitude"`
-    DestinationLongitude int            `db:"destination_longitude"`
-    Evaluation           *int           `db:"evaluation"`
-    CreatedAt            time.Time      `db:"created_at"`
-    UpdatedAt            time.Time      `db:"updated_at"`
-    ChairName            sql.NullString `db:"chair_name"`
-    ChairModel           sql.NullString `db:"chair_model"`
+	ID                   string         `db:"id"`
+	UserID               string         `db:"user_id"`
+	ChairID              sql.NullString `db:"chair_id"`
+	PickupLatitude       int            `db:"pickup_latitude"`
+	PickupLongitude      int            `db:"pickup_longitude"`
+	DestinationLatitude  int            `db:"destination_latitude"`
+	DestinationLongitude int            `db:"destination_longitude"`
+	Evaluation           *int           `db:"evaluation"`
+	CreatedAt            time.Time      `db:"created_at"`
+	UpdatedAt            time.Time      `db:"updated_at"`
+	ChairName            sql.NullString `db:"chair_name"`
+	ChairModel           sql.NullString `db:"chair_model"`
 }
 
 func appGetNotification(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("appGetNotification")
+	defer txn.End()
 	ctx := r.Context()
 	user := ctx.Value("user").(*User)
 	tx, err := db.Beginx()
@@ -684,6 +686,7 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	getRideNotificationTxn := app.StartTransaction("getRideNotification")
 	rideNotification := &RideNotification{}
 	query := `
 	    SELECT r.*, c.name AS chair_name, c.model AS chair_model
@@ -703,8 +706,10 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	getRideNotificationTxn.End()
 	yetSentRideStatus := RideStatus{}
 	status := ""
+	getRideStatusTxn := app.StartTransaction("getRideStatus")
 	if err := tx.GetContext(ctx, &yetSentRideStatus, `SELECT * FROM ride_statuses WHERE ride_id = ? AND app_sent_at IS NULL ORDER BY created_at ASC LIMIT 1`, rideNotification.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			status, err = getLatestRideStatus(ctx, tx, rideNotification.ID)
@@ -719,25 +724,28 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 	} else {
 		status = yetSentRideStatus.Status
 	}
+	getRideStatusTxn.End()
 
 	ride := &Ride{
-        ID:                   rideNotification.ID,
-        UserID:               rideNotification.UserID,
-        ChairID:              rideNotification.ChairID,
-        PickupLatitude:       rideNotification.PickupLatitude,
-        PickupLongitude:      rideNotification.PickupLongitude,
-        DestinationLatitude:  rideNotification.DestinationLatitude,
-        DestinationLongitude: rideNotification.DestinationLongitude,
-        Evaluation:           rideNotification.Evaluation,
-        CreatedAt:            rideNotification.CreatedAt,
-        UpdatedAt:            rideNotification.UpdatedAt,
-    }
+		ID:                   rideNotification.ID,
+		UserID:               rideNotification.UserID,
+		ChairID:              rideNotification.ChairID,
+		PickupLatitude:       rideNotification.PickupLatitude,
+		PickupLongitude:      rideNotification.PickupLongitude,
+		DestinationLatitude:  rideNotification.DestinationLatitude,
+		DestinationLongitude: rideNotification.DestinationLongitude,
+		Evaluation:           rideNotification.Evaluation,
+		CreatedAt:            rideNotification.CreatedAt,
+		UpdatedAt:            rideNotification.UpdatedAt,
+	}
 
+	calculateDiscountedFareTxn := app.StartTransaction("calculateDiscountedFare")
 	fare, err := calculateDiscountedFare(ctx, tx, user.ID, ride, rideNotification.PickupLatitude, rideNotification.PickupLongitude, rideNotification.DestinationLatitude, rideNotification.DestinationLongitude)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	calculateDiscountedFareTxn.End()
 	// SSEの設定
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
