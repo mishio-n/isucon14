@@ -134,3 +134,12 @@ CREATE TABLE coupons
   PRIMARY KEY (user_id, code)
 )
   COMMENT 'クーポンテーブル';
+
+-- by chatgpt
+CREATE INDEX idx_chairs_owner_id ON chairs (owner_id);
+CREATE INDEX idx_chair_locations_chair_id ON chair_locations (chair_id);
+CREATE INDEX idx_rides_user_id ON rides (user_id);
+CREATE INDEX idx_rides_chair_id ON rides (chair_id);
+CREATE INDEX idx_ride_statuses_ride_id ON ride_statuses (ride_id);
+CREATE INDEX idx_payment_tokens_token ON payment_tokens (token);
+CREATE INDEX idx_coupons_code ON coupons (code);
