@@ -661,18 +661,18 @@ type appGetNotificationResponseChairStats struct {
 }
 
 type RideNotification struct {
-    ID                   string         `db:"id"`
-    UserID               string         `db:"user_id"`
-    ChairID              sql.NullString `db:"chair_id"`
-    PickupLatitude       int            `db:"pickup_latitude"`
-    PickupLongitude      int            `db:"pickup_longitude"`
-    DestinationLatitude  int            `db:"destination_latitude"`
-    DestinationLongitude int            `db:"destination_longitude"`
-    Evaluation           *int           `db:"evaluation"`
-    CreatedAt            time.Time      `db:"created_at"`
-    UpdatedAt            time.Time      `db:"updated_at"`
-    ChairName            sql.NullString `db:"chair_name"`
-    ChairModel           sql.NullString `db:"chair_model"`
+	ID                   string         `db:"id"`
+	UserID               string         `db:"user_id"`
+	ChairID              sql.NullString `db:"chair_id"`
+	PickupLatitude       int            `db:"pickup_latitude"`
+	PickupLongitude      int            `db:"pickup_longitude"`
+	DestinationLatitude  int            `db:"destination_latitude"`
+	DestinationLongitude int            `db:"destination_longitude"`
+	Evaluation           *int           `db:"evaluation"`
+	CreatedAt            time.Time      `db:"created_at"`
+	UpdatedAt            time.Time      `db:"updated_at"`
+	ChairName            sql.NullString `db:"chair_name"`
+	ChairModel           sql.NullString `db:"chair_model"`
 }
 
 func appGetNotification(w http.ResponseWriter, r *http.Request) {
@@ -721,17 +721,17 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ride := &Ride{
-        ID:                   rideNotification.ID,
-        UserID:               rideNotification.UserID,
-        ChairID:              rideNotification.ChairID,
-        PickupLatitude:       rideNotification.PickupLatitude,
-        PickupLongitude:      rideNotification.PickupLongitude,
-        DestinationLatitude:  rideNotification.DestinationLatitude,
-        DestinationLongitude: rideNotification.DestinationLongitude,
-        Evaluation:           rideNotification.Evaluation,
-        CreatedAt:            rideNotification.CreatedAt,
-        UpdatedAt:            rideNotification.UpdatedAt,
-    }
+		ID:                   rideNotification.ID,
+		UserID:               rideNotification.UserID,
+		ChairID:              rideNotification.ChairID,
+		PickupLatitude:       rideNotification.PickupLatitude,
+		PickupLongitude:      rideNotification.PickupLongitude,
+		DestinationLatitude:  rideNotification.DestinationLatitude,
+		DestinationLongitude: rideNotification.DestinationLongitude,
+		Evaluation:           rideNotification.Evaluation,
+		CreatedAt:            rideNotification.CreatedAt,
+		UpdatedAt:            rideNotification.UpdatedAt,
+	}
 
 	fare, err := calculateDiscountedFare(ctx, tx, user.ID, ride, rideNotification.PickupLatitude, rideNotification.PickupLongitude, rideNotification.DestinationLatitude, rideNotification.DestinationLongitude)
 	if err != nil {
