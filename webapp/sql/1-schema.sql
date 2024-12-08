@@ -145,3 +145,4 @@ CREATE INDEX idx_ride_statuses_ride_id ON ride_statuses (ride_id);
 CREATE INDEX idx_payment_tokens_token ON payment_tokens (token);
 CREATE INDEX idx_coupons_code ON coupons (code);
 CREATE INDEX idx_coupons_used_by ON coupons (used_by);
+CREATE INDEX idx_chairs_access_token ON chairs (access_token);
