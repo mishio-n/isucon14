@@ -684,7 +684,7 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	ride := &RideNotification{}
+	rideNotification := &RideNotification{}
 	query := `
 	    SELECT r.*, c.name AS chair_name, c.model AS chair_model
 	    FROM rides r
@@ -693,7 +693,7 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 	    ORDER BY r.created_at DESC
 	    LIMIT 1
 	`
-	if err := tx.GetContext(ctx, ride, query, user.ID); err != nil {
+	if err := tx.GetContext(ctx, rideNotification, query, user.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeJSON(w, http.StatusOK, &appGetNotificationResponse{
 				RetryAfterMs: 30,
@@ -705,9 +705,9 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 	}
 	yetSentRideStatus := RideStatus{}
 	status := ""
-	if err := tx.GetContext(ctx, &yetSentRideStatus, `SELECT * FROM ride_statuses WHERE ride_id = ? AND app_sent_at IS NULL ORDER BY created_at ASC LIMIT 1`, ride.ID); err != nil {
+	if err := tx.GetContext(ctx, &yetSentRideStatus, `SELECT * FROM ride_statuses WHERE ride_id = ? AND app_sent_at IS NULL ORDER BY created_at ASC LIMIT 1`, rideNotification.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			status, err = getLatestRideStatus(ctx, tx, ride.ID)
+			status, err = getLatestRideStatus(ctx, tx, rideNotification.ID)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return
@@ -719,7 +719,21 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 	} else {
 		status = yetSentRideStatus.Status
 	}
-	fare, err := calculateDiscountedFare(ctx, tx, user.ID, ride, ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
+
+	ride := &Ride{
+        ID:                   rideNotification.ID,
+        UserID:               rideNotification.UserID,
+        ChairID:              rideNotification.ChairID,
+        PickupLatitude:       rideNotification.PickupLatitude,
+        PickupLongitude:      rideNotification.PickupLongitude,
+        DestinationLatitude:  rideNotification.DestinationLatitude,
+        DestinationLongitude: rideNotification.DestinationLongitude,
+        Evaluation:           rideNotification.Evaluation,
+        CreatedAt:            rideNotification.CreatedAt,
+        UpdatedAt:            rideNotification.UpdatedAt,
+    }
+
+	fare, err := calculateDiscountedFare(ctx, tx, user.ID, ride, rideNotification.PickupLatitude, rideNotification.PickupLongitude, rideNotification.DestinationLatitude, rideNotification.DestinationLongitude)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -731,31 +745,31 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 	// SSEメッセージの送信
 	response := &appGetNotificationResponse{
 		Data: &appGetNotificationResponseData{
-			RideID: ride.ID,
+			RideID: rideNotification.ID,
 			PickupCoordinate: Coordinate{
-				Latitude:  ride.PickupLatitude,
-				Longitude: ride.PickupLongitude,
+				Latitude:  rideNotification.PickupLatitude,
+				Longitude: rideNotification.PickupLongitude,
 			},
 			DestinationCoordinate: Coordinate{
-				Latitude:  ride.DestinationLatitude,
-				Longitude: ride.DestinationLongitude,
+				Latitude:  rideNotification.DestinationLatitude,
+				Longitude: rideNotification.DestinationLongitude,
 			},
 			Fare:      fare,
 			Status:    status,
-			CreatedAt: ride.CreatedAt.UnixMilli(),
-			UpdateAt:  ride.UpdatedAt.UnixMilli(),
+			CreatedAt: rideNotification.CreatedAt.UnixMilli(),
+			UpdateAt:  rideNotification.UpdatedAt.UnixMilli(),
 		},
 	}
-	if ride.ChairID.Valid {
-		stats, err := getChairStats(ctx, tx, ride.ChairID.String)
+	if rideNotification.ChairID.Valid {
+		stats, err := getChairStats(ctx, tx, rideNotification.ChairID.String)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		response.Data.Chair = &appGetNotificationResponseChair{
-			ID:    ride.ChairID.String,
-			Name:  ride.ChairName.String,
-			Model: ride.ChairModel.String,
+			ID:    rideNotification.ChairID.String,
+			Name:  rideNotification.ChairName.String,
+			Model: rideNotification.ChairModel.String,
 			Stats: stats,
 		}
 	}
