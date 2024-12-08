@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -21,6 +22,14 @@ import (
 
 var db *sqlx.DB
 var app *newrelic.Application
+
+type SSEClient struct {
+	ChairID string
+	Channel chan string
+}
+
+var clients = make(map[*SSEClient]bool)
+var clientsMutex = sync.Mutex{}
 
 func main() {
 	var err error

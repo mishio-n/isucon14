@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/oklog/ulid/v2"
@@ -188,6 +189,40 @@ type chairGetNotificationResponseData struct {
 func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	chair := ctx.Value("chair").(*Chair)
+	rideID := r.PathValue("ride_id")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+		return
+	}
+
+	client := &SSEClient{
+		ChairID: chair.ID,
+		Channel: make(chan string),
+	}
+
+	clientsMutex.Lock()
+	clients[client] = true
+	clientsMutex.Unlock()
+
+	defer func() {
+		clientsMutex.Lock()
+		delete(clients, client)
+		clientsMutex.Unlock()
+	}()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// 最新のライドの状態を即座に送信
+
+	req := &postChairRidesRideIDStatusRequest{}
+	if err := bindJSON(r, req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 
 	tx, err := db.Beginx()
 	if err != nil {
@@ -197,15 +232,71 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	ride := &Ride{}
+	if err := tx.GetContext(ctx, ride, "SELECT * FROM rides WHERE id = ? FOR UPDATE", rideID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, errors.New("ride not found"))
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	if ride.ChairID.String != chair.ID {
+		writeError(w, http.StatusBadRequest, errors.New("not assigned to this ride"))
+		return
+	}
+
+	// 状態遷移の検証
+	latestStatus, err := getLatestRideStatus(ctx, tx, ride.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	switch req.Status {
+	case "ENROUTE":
+		if latestStatus != "MATCHING" {
+			writeError(w, http.StatusBadRequest, errors.New("invalid status transition"))
+			return
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ENROUTE"); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	case "CARRYING":
+		if latestStatus != "PICKUP" {
+			writeError(w, http.StatusBadRequest, errors.New("invalid status transition"))
+			return
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "CARRYING"); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	case "COMPLETED":
+		if latestStatus != "CARRYING" {
+			writeError(w, http.StatusBadRequest, errors.New("invalid status transition"))
+			return
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "COMPLETED"); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	default:
+		writeError(w, http.StatusBadRequest, errors.New("invalid status"))
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// ここから追加
 	yetSentRideStatus := RideStatus{}
 	status := ""
 
 	if err := tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			// SSEの設定
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Connection", "keep-alive")
 
 			// SSEメッセージの送信
 			response := map[string]interface{}{
@@ -259,11 +350,6 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SSEの設定
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
 	// SSEメッセージの送信
 	response := &chairGetNotificationResponseData{
 		RideID: ride.ID,
@@ -287,8 +373,35 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	fmt.Fprintf(w, "data: %s\n\n", jsonResponse)
-	w.(http.Flusher).Flush()
+	message := string(jsonResponse)
+	fmt.Fprintf(w, "data: %s\n\n", message)
+	flusher.Flush()
+
+	// メッセージを受け入れて返却するだけ
+	for {
+		select {
+		case msg := <-client.Channel:
+			_, err := fmt.Fprintf(w, "data: %s\n\n", msg)
+			if err != nil {
+				log.Printf("Error writing message to client: %v", err)
+				return
+			}
+			flusher.Flush()
+		case <-r.Context().Done():
+			log.Println("Client disconnected")
+			return
+		}
+	}
+}
+
+func notifySSEClients(chairID, message string) {
+	clientsMutex.Lock()
+	defer clientsMutex.Unlock()
+	for client := range clients {
+		if client.ChairID == chairID {
+			client.Channel <- message
+		}
+	}
 }
 
 type postChairRidesRideIDStatusRequest struct {
@@ -373,6 +486,92 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	// ここから追加
+	yetSentRideStatus := RideStatus{}
+	status := ""
+
+	if err := tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+
+			// SSEメッセージの送信
+			response := map[string]interface{}{
+				"data": nil,
+			}
+			jsonResponse, err := json.Marshal(response)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			fmt.Fprintf(w, "data: %s\n\n", jsonResponse)
+			w.(http.Flusher).Flush()
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	if err := tx.GetContext(ctx, &yetSentRideStatus, `SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1`, ride.ID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			status, err = getLatestRideStatus(ctx, tx, ride.ID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+		} else {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	} else {
+		status = yetSentRideStatus.Status
+	}
+
+	user := &User{}
+	err = tx.GetContext(ctx, user, "SELECT * FROM users WHERE id = ? FOR SHARE", ride.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	if yetSentRideStatus.ID != "" {
+		_, err := tx.ExecContext(ctx, `UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?`, yetSentRideStatus.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// SSEメッセージの送信
+	response := &chairGetNotificationResponseData{
+		RideID: ride.ID,
+		User: simpleUser{
+			ID:   user.ID,
+			Name: fmt.Sprintf("%s %s", user.Firstname, user.Lastname),
+		},
+		PickupCoordinate: Coordinate{
+			Latitude:  ride.PickupLatitude,
+			Longitude: ride.PickupLongitude,
+		},
+		DestinationCoordinate: Coordinate{
+			Latitude:  ride.DestinationLatitude,
+			Longitude: ride.DestinationLongitude,
+		},
+		Status: status,
+	}
+
+	jsonResponse, err := json.Marshal(response)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	message := string(jsonResponse)
+
+	notifySSEClients(chair.ID, message)
 
 	w.WriteHeader(http.StatusNoContent)
 }
