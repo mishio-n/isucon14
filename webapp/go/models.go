@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -24,8 +25,7 @@ type ChairModel struct {
 type ChairLocation struct {
 	ID        string    `db:"id"`
 	ChairID   string    `db:"chair_id"`
-	Latitude  int       `db:"latitude"`
-	Longitude int       `db:"longitude"`
+	Location  string    `db:"location"`
 	CreatedAt time.Time `db:"created_at"`
 }
 
@@ -48,16 +48,14 @@ type PaymentToken struct {
 }
 
 type Ride struct {
-	ID                   string         `db:"id"`
-	UserID               string         `db:"user_id"`
-	ChairID              sql.NullString `db:"chair_id"`
-	PickupLatitude       int            `db:"pickup_latitude"`
-	PickupLongitude      int            `db:"pickup_longitude"`
-	DestinationLatitude  int            `db:"destination_latitude"`
-	DestinationLongitude int            `db:"destination_longitude"`
-	Evaluation           *int           `db:"evaluation"`
-	CreatedAt            time.Time      `db:"created_at"`
-	UpdatedAt            time.Time      `db:"updated_at"`
+	ID                  string         `db:"id"`
+	UserID              string         `db:"user_id"`
+	ChairID             sql.NullString `db:"chair_id"`
+	PickupLocation      string         `db:"pickup_location"`
+	DestinationLocation string         `db:"destination_location"`
+	Evaluation          *int           `db:"evaluation"`
+	CreatedAt           time.Time      `db:"created_at"`
+	UpdatedAt           time.Time      `db:"updated_at"`
 }
 
 type RideStatus struct {
@@ -84,4 +82,13 @@ type Coupon struct {
 	Discount  int       `db:"discount"`
 	CreatedAt time.Time `db:"created_at"`
 	UsedBy    *string   `db:"used_by"`
+}
+
+func parseCoordinate(geom string) Coordinate {
+	var lat, lon float64
+	fmt.Sscanf(geom, "POINT(%f %f)", &lat, &lon)
+	return Coordinate{
+		Latitude:  int(lat),
+		Longitude: int(lon),
+	}
 }

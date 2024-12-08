@@ -160,7 +160,9 @@ func sumSales(rides []Ride) int {
 }
 
 func calculateSale(ride Ride) int {
-	return calculateFare(ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
+	pickupCoordinate := parseCoordinate(ride.PickupLocation)
+	destinationCoordinate := parseCoordinate(ride.DestinationLocation)
+	return calculateFare(int(pickupCoordinate.Latitude), int(pickupCoordinate.Longitude), int(destinationCoordinate.Latitude), int(destinationCoordinate.Longitude))
 }
 
 type chairWithDetail struct {
@@ -211,8 +213,7 @@ FROM chairs
                           MAX(created_at)          AS total_distance_updated_at
                    FROM (SELECT chair_id,
                                 created_at,
-                                ABS(latitude - LAG(latitude) OVER (PARTITION BY chair_id ORDER BY created_at)) +
-                                ABS(longitude - LAG(longitude) OVER (PARTITION BY chair_id ORDER BY created_at)) AS distance
+                                ST_Distance_Sphere(location, LAG(location) OVER (PARTITION BY chair_id ORDER BY created_at)) AS distance
                          FROM chair_locations
                          WHERE chair_id IN (SELECT id FROM chairs WHERE owner_id = ?)) tmp
                    GROUP BY chair_id) distance_table ON distance_table.chair_id = chairs.id

@@ -205,7 +205,7 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 	if err := tx.SelectContext(
 		ctx,
 		&rides,
-		`SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC`,
+		`SELECT id, user_id, chair_id, ST_AsText(pickup_location) AS pickup_location, ST_AsText(destination_location) AS destination_location, evaluation, created_at, updated_at FROM rides WHERE user_id = ? ORDER BY created_at DESC`,
 		user.ID,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -223,7 +223,10 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		fare, err := calculateDiscountedFare(ctx, tx, user.ID, &ride, ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
+		pickupCoordinate := parseCoordinate(ride.PickupLocation)
+		destinationCoordinate := parseCoordinate(ride.DestinationLocation)
+
+		fare, err := calculateDiscountedFare(ctx, tx, user.ID, &ride, int(pickupCoordinate.Latitude), int(pickupCoordinate.Longitude), int(destinationCoordinate.Latitude), int(destinationCoordinate.Longitude))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -231,8 +234,8 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 
 		item := getAppRidesResponseItem{
 			ID:                    ride.ID,
-			PickupCoordinate:      Coordinate{Latitude: ride.PickupLatitude, Longitude: ride.PickupLongitude},
-			DestinationCoordinate: Coordinate{Latitude: ride.DestinationLatitude, Longitude: ride.DestinationLongitude},
+			PickupCoordinate:      Coordinate{Latitude: pickupCoordinate.Latitude, Longitude: pickupCoordinate.Longitude},
+			DestinationCoordinate: Coordinate{Latitude: destinationCoordinate.Latitude, Longitude: destinationCoordinate.Longitude},
 			Fare:                  fare,
 			Evaluation:            *ride.Evaluation,
 			RequestedAt:           ride.CreatedAt.UnixMilli(),
@@ -338,11 +341,14 @@ func appPostRides(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	pickupLocation := fmt.Sprintf("POINT(%f %f)", float64(req.PickupCoordinate.Latitude), float64(req.PickupCoordinate.Longitude))
+	destinationLocation := fmt.Sprintf("POINT(%f %f)", float64(req.DestinationCoordinate.Latitude), float64(req.DestinationCoordinate.Longitude))
+
 	if _, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO rides (id, user_id, pickup_latitude, pickup_longitude, destination_latitude, destination_longitude)
-				  VALUES (?, ?, ?, ?, ?, ?)`,
-		rideID, user.ID, req.PickupCoordinate.Latitude, req.PickupCoordinate.Longitude, req.DestinationCoordinate.Latitude, req.DestinationCoordinate.Longitude,
+		`INSERT INTO rides (id, user_id, pickup_location, destination_location)
+                  VALUES (?, ?, ST_GeomFromText(?), ST_GeomFromText(?))`,
+		rideID, user.ID, pickupLocation, destinationLocation,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -592,7 +598,9 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fare, err := calculateDiscountedFare(ctx, tx, ride.UserID, ride, ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
+	pickupCoordinate := parseCoordinate(ride.PickupLocation)
+	destinationCoordinate := parseCoordinate(ride.DestinationLocation)
+	fare, err := calculateDiscountedFare(ctx, tx, ride.UserID, ride, pickupCoordinate.Latitude, pickupCoordinate.Longitude, destinationCoordinate.Latitude, destinationCoordinate.Longitude)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -661,18 +669,18 @@ type appGetNotificationResponseChairStats struct {
 }
 
 type RideNotification struct {
-    ID                   string         `db:"id"`
-    UserID               string         `db:"user_id"`
-    ChairID              sql.NullString `db:"chair_id"`
-    PickupLatitude       int            `db:"pickup_latitude"`
-    PickupLongitude      int            `db:"pickup_longitude"`
-    DestinationLatitude  int            `db:"destination_latitude"`
-    DestinationLongitude int            `db:"destination_longitude"`
-    Evaluation           *int           `db:"evaluation"`
-    CreatedAt            time.Time      `db:"created_at"`
-    UpdatedAt            time.Time      `db:"updated_at"`
-    ChairName            sql.NullString `db:"chair_name"`
-    ChairModel           sql.NullString `db:"chair_model"`
+	ID                   string         `db:"id"`
+	UserID               string         `db:"user_id"`
+	ChairID              sql.NullString `db:"chair_id"`
+	PickupLatitude       int            `db:"pickup_latitude"`
+	PickupLongitude      int            `db:"pickup_longitude"`
+	DestinationLatitude  int            `db:"destination_latitude"`
+	DestinationLongitude int            `db:"destination_longitude"`
+	Evaluation           *int           `db:"evaluation"`
+	CreatedAt            time.Time      `db:"created_at"`
+	UpdatedAt            time.Time      `db:"updated_at"`
+	ChairName            sql.NullString `db:"chair_name"`
+	ChairModel           sql.NullString `db:"chair_model"`
 }
 
 func appGetNotification(w http.ResponseWriter, r *http.Request) {
@@ -721,19 +729,20 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ride := &Ride{
-        ID:                   rideNotification.ID,
-        UserID:               rideNotification.UserID,
-        ChairID:              rideNotification.ChairID,
-        PickupLatitude:       rideNotification.PickupLatitude,
-        PickupLongitude:      rideNotification.PickupLongitude,
-        DestinationLatitude:  rideNotification.DestinationLatitude,
-        DestinationLongitude: rideNotification.DestinationLongitude,
-        Evaluation:           rideNotification.Evaluation,
-        CreatedAt:            rideNotification.CreatedAt,
-        UpdatedAt:            rideNotification.UpdatedAt,
-    }
+		ID:                  rideNotification.ID,
+		UserID:              rideNotification.UserID,
+		ChairID:             rideNotification.ChairID,
+		PickupLocation:      fmt.Sprintf("POINT(%f %f)", float64(rideNotification.PickupLatitude), float64(rideNotification.PickupLongitude)),
+		DestinationLocation: fmt.Sprintf("POINT(%f %f)", float64(rideNotification.DestinationLatitude), float64(rideNotification.DestinationLongitude)),
+		Evaluation:          rideNotification.Evaluation,
+		CreatedAt:           rideNotification.CreatedAt,
+		UpdatedAt:           rideNotification.UpdatedAt,
+	}
 
-	fare, err := calculateDiscountedFare(ctx, tx, user.ID, ride, rideNotification.PickupLatitude, rideNotification.PickupLongitude, rideNotification.DestinationLatitude, rideNotification.DestinationLongitude)
+	pickupCoordinate := parseCoordinate(ride.PickupLocation)
+	destinationCoordinate := parseCoordinate(ride.DestinationLocation)
+
+	fare, err := calculateDiscountedFare(ctx, tx, user.ID, ride, int(pickupCoordinate.Latitude), int(pickupCoordinate.Longitude), int(destinationCoordinate.Latitude), int(destinationCoordinate.Longitude))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -745,19 +754,13 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 	// SSEメッセージの送信
 	response := &appGetNotificationResponse{
 		Data: &appGetNotificationResponseData{
-			RideID: rideNotification.ID,
-			PickupCoordinate: Coordinate{
-				Latitude:  rideNotification.PickupLatitude,
-				Longitude: rideNotification.PickupLongitude,
-			},
-			DestinationCoordinate: Coordinate{
-				Latitude:  rideNotification.DestinationLatitude,
-				Longitude: rideNotification.DestinationLongitude,
-			},
-			Fare:      fare,
-			Status:    status,
-			CreatedAt: rideNotification.CreatedAt.UnixMilli(),
-			UpdateAt:  rideNotification.UpdatedAt.UnixMilli(),
+			RideID:                ride.ID,
+			PickupCoordinate:      parseCoordinate(ride.PickupLocation),
+			DestinationCoordinate: parseCoordinate(ride.DestinationLocation),
+			Fare:                  fare,
+			Status:                status,
+			CreatedAt:             ride.CreatedAt.UnixMilli(),
+			UpdateAt:              ride.UpdatedAt.UnixMilli(),
 		},
 	}
 	if rideNotification.ChairID.Valid {
@@ -950,7 +953,7 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		err = tx.GetContext(
 			ctx,
 			chairLocation,
-			`SELECT * FROM chair_locations WHERE chair_id = ? ORDER BY created_at DESC LIMIT 1`,
+			`SELECT id, chair_id, ST_AsText(location) AS location, created_at FROM chair_locations WHERE chair_id = ? ORDER BY created_at DESC LIMIT 1`,
 			chair.ID,
 		)
 		if err != nil {
@@ -961,14 +964,15 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if calculateDistance(coordinate.Latitude, coordinate.Longitude, chairLocation.Latitude, chairLocation.Longitude) <= distance {
+		chairCoordinate := parseCoordinate(chairLocation.Location)
+		if calculateDistance(coordinate.Latitude, coordinate.Longitude, chairCoordinate.Latitude, chairCoordinate.Longitude) <= distance {
 			nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
 				ID:    chair.ID,
 				Name:  chair.Name,
 				Model: chair.Model,
 				CurrentCoordinate: Coordinate{
-					Latitude:  chairLocation.Latitude,
-					Longitude: chairLocation.Longitude,
+					Latitude:  chairCoordinate.Latitude,
+					Longitude: chairCoordinate.Longitude,
 				},
 			})
 		}
@@ -1000,10 +1004,12 @@ func calculateDiscountedFare(ctx context.Context, tx *sqlx.Tx, userID string, ri
 	var coupon Coupon
 	discount := 0
 	if ride != nil {
-		destLatitude = ride.DestinationLatitude
-		destLongitude = ride.DestinationLongitude
-		pickupLatitude = ride.PickupLatitude
-		pickupLongitude = ride.PickupLongitude
+		pickupCoordinate := parseCoordinate(ride.PickupLocation)
+		destinationCoordinate := parseCoordinate(ride.DestinationLocation)
+		destLatitude = int(destinationCoordinate.Latitude)
+		destLongitude = int(destinationCoordinate.Longitude)
+		pickupLatitude = int(pickupCoordinate.Latitude)
+		pickupLongitude = int(pickupCoordinate.Longitude)
 
 		// すでにクーポンが紐づいているならそれの割引額を参照
 		if err := tx.GetContext(ctx, &coupon, "SELECT * FROM coupons WHERE used_by = ?", ride.ID); err != nil {

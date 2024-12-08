@@ -112,11 +112,12 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	_location := fmt.Sprintf("POINT(%f %f)", req.Latitude, req.Longitude)
 	chairLocationID := ulid.Make().String()
 	if _, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO chair_locations (id, chair_id, latitude, longitude) VALUES (?, ?, ?, ?)`,
-		chairLocationID, chair.ID, req.Latitude, req.Longitude,
+		`INSERT INTO chair_locations (id, chair_id, location) VALUES (?, ?, ST_GeomFromText(?))`,
+		chairLocationID, chair.ID, _location,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -141,14 +142,17 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if status != "COMPLETED" && status != "CANCELED" {
-			if req.Latitude == ride.PickupLatitude && req.Longitude == ride.PickupLongitude && status == "ENROUTE" {
+			pickupCoordinate := parseCoordinate(ride.PickupLocation)
+			destinationCoordinate := parseCoordinate(ride.DestinationLocation)
+
+			if req.Latitude == int(pickupCoordinate.Latitude) && req.Longitude == int(pickupCoordinate.Longitude) && status == "ENROUTE" {
 				if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "PICKUP"); err != nil {
 					writeError(w, http.StatusInternalServerError, err)
 					return
 				}
 			}
 
-			if req.Latitude == ride.DestinationLatitude && req.Longitude == ride.DestinationLongitude && status == "CARRYING" {
+			if req.Latitude == int(destinationCoordinate.Latitude) && req.Longitude == int(destinationCoordinate.Longitude) && status == "CARRYING" {
 				if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ARRIVED"); err != nil {
 					writeError(w, http.StatusInternalServerError, err)
 					return
@@ -271,15 +275,9 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 			ID:   user.ID,
 			Name: fmt.Sprintf("%s %s", user.Firstname, user.Lastname),
 		},
-		PickupCoordinate: Coordinate{
-			Latitude:  ride.PickupLatitude,
-			Longitude: ride.PickupLongitude,
-		},
-		DestinationCoordinate: Coordinate{
-			Latitude:  ride.DestinationLatitude,
-			Longitude: ride.DestinationLongitude,
-		},
-		Status: status,
+		PickupCoordinate:      parseCoordinate(ride.PickupLocation),
+		DestinationCoordinate: parseCoordinate(ride.DestinationLocation),
+		Status:                status,
 	}
 
 	jsonResponse, err := json.Marshal(response)
