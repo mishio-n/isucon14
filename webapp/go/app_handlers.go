@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -704,6 +706,12 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SSEの設定
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// SSEメッセージの送信
 	response := &appGetNotificationResponse{
 		Data: &appGetNotificationResponseData{
 			RideID: ride.ID,
@@ -720,7 +728,6 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: ride.CreatedAt.UnixMilli(),
 			UpdateAt:  ride.UpdatedAt.UnixMilli(),
 		},
-		RetryAfterMs: 30,
 	}
 
 	if ride.ChairID.Valid {
@@ -757,7 +764,14 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, response)
+	// SSEメッセージの送信
+	jsonResponse, err := json.Marshal(response.Data)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	fmt.Fprintf(w, "data: %s\n\n", jsonResponse)
+	w.(http.Flusher).Flush()
 }
 
 func getChairStats(ctx context.Context, tx *sqlx.Tx, chairID string) (appGetNotificationResponseChairStats, error) {

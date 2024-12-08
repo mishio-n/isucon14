@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -194,15 +195,29 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+
 	ride := &Ride{}
 	yetSentRideStatus := RideStatus{}
 	status := ""
 
 	if err := tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeJSON(w, http.StatusOK, &chairGetNotificationResponse{
-				RetryAfterMs: 30,
-			})
+			// SSEの設定
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+
+			// SSEメッセージの送信
+			response := map[string]interface{}{
+				"data": nil,
+			}
+			jsonResponse, err := json.Marshal(response)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			fmt.Fprintf(w, "data: %s\n\n", jsonResponse)
+			w.(http.Flusher).Flush()
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err)
@@ -244,25 +259,36 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, &chairGetNotificationResponse{
-		Data: &chairGetNotificationResponseData{
-			RideID: ride.ID,
-			User: simpleUser{
-				ID:   user.ID,
-				Name: fmt.Sprintf("%s %s", user.Firstname, user.Lastname),
-			},
-			PickupCoordinate: Coordinate{
-				Latitude:  ride.PickupLatitude,
-				Longitude: ride.PickupLongitude,
-			},
-			DestinationCoordinate: Coordinate{
-				Latitude:  ride.DestinationLatitude,
-				Longitude: ride.DestinationLongitude,
-			},
-			Status: status,
+	// SSEの設定
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// SSEメッセージの送信
+	response := &chairGetNotificationResponseData{
+		RideID: ride.ID,
+		User: simpleUser{
+			ID:   user.ID,
+			Name: fmt.Sprintf("%s %s", user.Firstname, user.Lastname),
 		},
-		RetryAfterMs: 30,
-	})
+		PickupCoordinate: Coordinate{
+			Latitude:  ride.PickupLatitude,
+			Longitude: ride.PickupLongitude,
+		},
+		DestinationCoordinate: Coordinate{
+			Latitude:  ride.DestinationLatitude,
+			Longitude: ride.DestinationLongitude,
+		},
+		Status: status,
+	}
+
+	jsonResponse, err := json.Marshal(response)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	fmt.Fprintf(w, "data: %s\n\n", jsonResponse)
+	w.(http.Flusher).Flush()
 }
 
 type postChairRidesRideIDStatusRequest struct {
@@ -303,30 +329,44 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 状態遷移の検証
+	latestStatus, err := getLatestRideStatus(ctx, tx, ride.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	switch req.Status {
-	// Acknowledge the ride
 	case "ENROUTE":
+		if latestStatus != "MATCHING" {
+			writeError(w, http.StatusBadRequest, errors.New("invalid status transition"))
+			return
+		}
 		if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ENROUTE"); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-	// After Picking up user
 	case "CARRYING":
-		status, err := getLatestRideStatus(ctx, tx, ride.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if status != "PICKUP" {
-			writeError(w, http.StatusBadRequest, errors.New("chair has not arrived yet"))
+		if latestStatus != "PICKUP" {
+			writeError(w, http.StatusBadRequest, errors.New("invalid status transition"))
 			return
 		}
 		if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "CARRYING"); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+	case "COMPLETED":
+		if latestStatus != "CARRYING" {
+			writeError(w, http.StatusBadRequest, errors.New("invalid status transition"))
+			return
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "COMPLETED"); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 	default:
 		writeError(w, http.StatusBadRequest, errors.New("invalid status"))
+		return
 	}
 
 	if err := tx.Commit(); err != nil {
