@@ -1019,7 +1019,7 @@ func calculateDiscountedFare(ctx context.Context, tx *sqlx.Tx, userID string, ri
 		pickupLongitude = ride.PickupLongitude	
 		// すでにクーポンが紐づいている場合の割引額を参照
 		for _, coupon := range coupons {
-		    if coupon.UsedBy == ride.ID {
+		    if coupon.UsedBy != nil && *coupon.UsedBy == ride.ID {
 		        discount = coupon.Discount
 		        break
 		    }
