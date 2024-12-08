@@ -676,8 +676,6 @@ type RideNotification struct {
 }
 
 func appGetNotification(w http.ResponseWriter, r *http.Request) {
-	txn := app.StartTransaction("appGetNotification")
-	defer txn.End()
 	ctx := r.Context()
 	user := ctx.Value("user").(*User)
 	tx, err := db.Beginx()
@@ -686,7 +684,6 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	getRideNotificationTxn := app.StartTransaction("getRideNotification")
 	rideNotification := &RideNotification{}
 	query := `
 	    SELECT r.*, c.name AS chair_name, c.model AS chair_model
@@ -706,10 +703,8 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	getRideNotificationTxn.End()
 	yetSentRideStatus := RideStatus{}
 	status := ""
-	getRideStatusTxn := app.StartTransaction("getRideStatus")
 	if err := tx.GetContext(ctx, &yetSentRideStatus, `SELECT * FROM ride_statuses WHERE ride_id = ? AND app_sent_at IS NULL ORDER BY created_at ASC LIMIT 1`, rideNotification.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			status, err = getLatestRideStatus(ctx, tx, rideNotification.ID)
@@ -724,7 +719,6 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 	} else {
 		status = yetSentRideStatus.Status
 	}
-	getRideStatusTxn.End()
 
 	ride := &Ride{
 		ID:                   rideNotification.ID,
@@ -739,13 +733,11 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:            rideNotification.UpdatedAt,
 	}
 
-	calculateDiscountedFareTxn := app.StartTransaction("calculateDiscountedFare")
 	fare, err := calculateDiscountedFare(ctx, tx, user.ID, ride, rideNotification.PickupLatitude, rideNotification.PickupLongitude, rideNotification.DestinationLatitude, rideNotification.DestinationLongitude)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	calculateDiscountedFareTxn.End()
 	// SSEの設定
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
