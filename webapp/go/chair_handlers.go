@@ -103,7 +103,11 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chair := ctx.Value("chair").(*Chair)
+	chair, ok := ctx.Value("chair").(*Chair)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, errors.New("failed to get chair from context"))
+		return
+	}
 
 	tx, err := db.Beginx()
 	if err != nil {
@@ -113,11 +117,7 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	chairLocationID := ulid.Make().String()
-	if _, err := tx.ExecContext(
-		ctx,
-		`INSERT INTO chair_locations (id, chair_id, latitude, longitude) VALUES (?, ?, ?, ?)`,
-		chairLocationID, chair.ID, req.Latitude, req.Longitude,
-	); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO chair_locations (id, chair_id, latitude, longitude) VALUES (?, ?, ?, ?)`, chairLocationID, chair.ID, req.Latitude, req.Longitude); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -129,12 +129,11 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ride := &Ride{}
-	if err := tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-	} else {
+	if err := tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	    writeError(w, http.StatusInternalServerError, err)
+	    return
+	}	
+	if ride.ID != "" {
 		status, err := getLatestRideStatus(ctx, tx, ride.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
