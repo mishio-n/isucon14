@@ -4,6 +4,7 @@ import (
 	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -22,16 +23,20 @@ var db *sqlx.DB
 var app *newrelic.Application
 
 func main() {
+	var err error
 	mux := setup()
 	slog.Info("Listening on :8080")
 	http.ListenAndServe(":8080", mux)
 
-	app, _ = newrelic.NewApplication(
+	app, err = newrelic.NewApplication(
 		newrelic.ConfigAppName("isuride-go"),
 		newrelic.ConfigLicense("4dbee0767e0ea7111b4b88478b8686bfFFFFNRAL"),
 		newrelic.ConfigDistributedTracerEnabled(true),
 		newrelic.ConfigAppLogForwardingEnabled(true),
 	)
+	if err != nil {
+		log.Fatalf("failed to create newrelic application: %v", err)
+	}
 }
 
 func setup() http.Handler {
