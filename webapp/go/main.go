@@ -80,13 +80,6 @@ func setup() http.Handler {
 	db = _db
 
 	mux := chi.NewRouter()
-
-	// internal handlers
-	{
-		// mux.HandleFunc("GET /api/internal/matching", internalGetMatching)
-		mux.HandleFunc(newrelic.WrapHandleFunc(app, "GET /api/internal/matching", internalGetMatching))
-	}
-
 	mux.Use(middleware.Logger)
 	mux.Use(middleware.Recoverer)
 	// mux.Use(newrelicMiddleware(app))
@@ -140,6 +133,12 @@ func setup() http.Handler {
 		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "GET /api/chair/notification", chairGetNotification))
 		// authedMux.HandleFunc("POST /api/chair/rides/{ride_id}/status", chairPostRideStatus)
 		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "POST /api/chair/rides/{ride_id}/status", chairPostRideStatus))
+	}
+
+	// internal handlers
+	{
+		// mux.HandleFunc("GET /api/internal/matching", internalGetMatching)
+		mux.HandleFunc(newrelic.WrapHandleFunc(app, "GET /api/internal/matching", internalGetMatching))
 	}
 
 	return mux
