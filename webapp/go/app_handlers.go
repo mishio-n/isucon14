@@ -997,44 +997,52 @@ func calculateFare(pickupLatitude, pickupLongitude, destLatitude, destLongitude 
 }
 
 func calculateDiscountedFare(ctx context.Context, tx *sqlx.Tx, userID string, ride *Ride, pickupLatitude, pickupLongitude, destLatitude, destLongitude int) (int, error) {
-	var coupon Coupon
+	var coupons []Coupon
 	discount := 0
+
+    // クーポン情報を一度に取得
+    query := `
+        SELECT * FROM coupons 
+        WHERE (user_id = ? AND code = 'CP_NEW2024' AND used_by IS NULL) 
+        OR (user_id = ? AND used_by IS NULL) 
+        OR (used_by = ?)
+        ORDER BY created_at
+    `
+    if err := tx.SelectContext(ctx, &coupons, query, userID, userID, ride.ID); err != nil {
+        return 0, err
+    }
+
 	if ride != nil {
 		destLatitude = ride.DestinationLatitude
 		destLongitude = ride.DestinationLongitude
 		pickupLatitude = ride.PickupLatitude
-		pickupLongitude = ride.PickupLongitude
-
-		// すでにクーポンが紐づいているならそれの割引額を参照
-		if err := tx.GetContext(ctx, &coupon, "SELECT * FROM coupons WHERE used_by = ?", ride.ID); err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				return 0, err
-			}
-		} else {
-			discount = coupon.Discount
+		pickupLongitude = ride.PickupLongitude	
+		// すでにクーポンが紐づいている場合の割引額を参照
+		for _, coupon := range coupons {
+		    if coupon.UsedBy == ride.ID {
+		        discount = coupon.Discount
+		        break
+		    }
 		}
-	} else {
-		// 初回利用クーポンを最優先で使う
-		if err := tx.GetContext(ctx, &coupon, "SELECT * FROM coupons WHERE user_id = ? AND code = 'CP_NEW2024' AND used_by IS NULL", userID); err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				return 0, err
-			}
+    } else {
+        // 初回利用クーポンを最優先で使う
+        for _, coupon := range coupons {
+            if coupon.UserID == userID && coupon.Code == "CP_NEW2024" && coupon.UsedBy == nil {
+                discount = coupon.Discount
+                break
+            }
+        }
 
-			// 無いなら他のクーポンを付与された順番に使う
-			if err := tx.GetContext(ctx, &coupon, "SELECT * FROM coupons WHERE user_id = ? AND used_by IS NULL ORDER BY created_at LIMIT 1", userID); err != nil {
-				if !errors.Is(err, sql.ErrNoRows) {
-					return 0, err
-				}
-			} else {
-				discount = coupon.Discount
-			}
-		} else {
-			discount = coupon.Discount
-		}
-	}
+        // 無いなら他のクーポンを付与された順番に使う
+        if discount == 0 {
+            for _, coupon := range coupons {
+                if coupon.UserID == userID && coupon.UsedBy == nil {
+                    discount = coupon.Discount
+                    break
+                }
+            }
+        }
+    }
 
-	meteredFare := farePerDistance * calculateDistance(pickupLatitude, pickupLongitude, destLatitude, destLongitude)
-	discountedMeteredFare := max(meteredFare-discount, 0)
-
-	return initialFare + discountedMeteredFare, nil
+	return discount, nil
 }
