@@ -4,7 +4,6 @@ import (
 	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -16,23 +15,12 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
-	"github.com/newrelic/go-agent/v3/newrelic"
 )
 
 var db *sqlx.DB
-var app *newrelic.Application
 
 func main() {
-	var err error
-	app, err = newrelic.NewApplication(
-		newrelic.ConfigAppName("isuride-go"),
-		newrelic.ConfigLicense("4dbee0767e0ea7111b4b88478b8686bfFFFFNRAL"),
-		newrelic.ConfigDistributedTracerEnabled(true),
-		newrelic.ConfigAppLogForwardingEnabled(true),
-	)
-	if err != nil {
-		log.Fatalf("failed to create newrelic application: %v", err)
-	}
+
 	mux := setup()
 	slog.Info("Listening on :8080")
 	http.ListenAndServe(":8080", mux)
@@ -83,63 +71,45 @@ func setup() http.Handler {
 	mux := chi.NewRouter()
 	mux.Use(middleware.Logger)
 	mux.Use(middleware.Recoverer)
-	// mux.Use(newrelicMiddleware(app))
 	mux.HandleFunc("POST /api/initialize", postInitialize)
 
 	// app handlers
 	{
-		// mux.HandleFunc("POST /api/app/users", appPostUsers)
-		mux.HandleFunc(newrelic.WrapHandleFunc(app, "POST /api/app/users", appPostUsers))
+		mux.HandleFunc("POST /api/app/users", appPostUsers)
 
 		authedMux := mux.With(appAuthMiddleware)
-		// authedMux.HandleFunc("POST /api/app/payment-methods", appPostPaymentMethods)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "POST /api/app/payment-methods", appPostPaymentMethods))
-		// authedMux.HandleFunc("GET /api/app/rides", appGetRides)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "GET /api/app/rides", appGetRides))
-		// authedMux.HandleFunc("POST /api/app/rides", appPostRides)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "POST /api/app/rides", appPostRides))
-		// authedMux.HandleFunc("POST /api/app/rides/estimated-fare", appPostRidesEstimatedFare)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "POST /api/app/rides/estimated-fare", appPostRidesEstimatedFare))
-		// authedMux.HandleFunc("POST /api/app/rides/{ride_id}/evaluation", appPostRideEvaluatation)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "POST /api/app/rides/{ride_id}/evaluation", appPostRideEvaluatation))
-		// authedMux.HandleFunc("GET /api/app/notification", appGetNotification)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "GET /api/app/notification", appGetNotification))
-		// authedMux.HandleFunc("GET /api/app/nearby-chairs", appGetNearbyChairs)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "GET /api/app/nearby-chairs", appGetNearbyChairs))
+		authedMux.HandleFunc("POST /api/app/payment-methods", appPostPaymentMethods)
+		authedMux.HandleFunc("GET /api/app/rides", appGetRides)
+		authedMux.HandleFunc("POST /api/app/rides", appPostRides)
+		authedMux.HandleFunc("POST /api/app/rides/estimated-fare", appPostRidesEstimatedFare)
+		authedMux.HandleFunc("POST /api/app/rides/{ride_id}/evaluation", appPostRideEvaluatation)
+		authedMux.HandleFunc("GET /api/app/notification", appGetNotification)
+		authedMux.HandleFunc("GET /api/app/nearby-chairs", appGetNearbyChairs)
 	}
 
 	// owner handlers
 	{
-		// mux.HandleFunc("POST /api/owner/owners", ownerPostOwners)
-		mux.HandleFunc(newrelic.WrapHandleFunc(app, "POST /api/owner/owners", ownerPostOwners))
+		mux.HandleFunc("POST /api/owner/owners", ownerPostOwners)
 
 		authedMux := mux.With(ownerAuthMiddleware)
-		// authedMux.HandleFunc("GET /api/owner/sales", ownerGetSales)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "GET /api/owner/sales", ownerGetSales))
-		// authedMux.HandleFunc("GET /api/owner/chairs", ownerGetChairs)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "GET /api/owner/chairs", ownerGetChairs))
+		authedMux.HandleFunc("GET /api/owner/sales", ownerGetSales)
+		authedMux.HandleFunc("GET /api/owner/chairs", ownerGetChairs)
 	}
 
 	// chair handlers
 	{
-		// mux.HandleFunc("POST /api/chair/chairs", chairPostChairs)
-		mux.HandleFunc(newrelic.WrapHandleFunc(app, "POST /api/chair/chairs", chairPostChairs))
+		mux.HandleFunc("POST /api/chair/chairs", chairPostChairs)
 
 		authedMux := mux.With(chairAuthMiddleware)
-		// authedMux.HandleFunc("POST /api/chair/activity", chairPostActivity)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "POST /api/chair/activity", chairPostActivity))
-		// authedMux.HandleFunc("POST /api/chair/coordinate", chairPostCoordinate)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "POST /api/chair/coordinate", chairPostCoordinate))
-		// authedMux.HandleFunc("GET /api/chair/notification", chairGetNotification)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "GET /api/chair/notification", chairGetNotification))
-		// authedMux.HandleFunc("POST /api/chair/rides/{ride_id}/status", chairPostRideStatus)
-		authedMux.HandleFunc(newrelic.WrapHandleFunc(app, "POST /api/chair/rides/{ride_id}/status", chairPostRideStatus))
+		authedMux.HandleFunc("POST /api/chair/activity", chairPostActivity)
+		authedMux.HandleFunc("POST /api/chair/coordinate", chairPostCoordinate)
+		authedMux.HandleFunc("GET /api/chair/notification", chairGetNotification)
+		authedMux.HandleFunc("POST /api/chair/rides/{ride_id}/status", chairPostRideStatus)
 	}
 
 	// internal handlers
 	{
-		// mux.HandleFunc("GET /api/internal/matching", internalGetMatching)
-		mux.HandleFunc(newrelic.WrapHandleFunc(app, "GET /api/internal/matching", internalGetMatching))
+		mux.HandleFunc("GET /api/internal/matching", internalGetMatching)
 	}
 
 	return mux
@@ -214,23 +184,4 @@ func secureRandomStr(b int) string {
 		panic(err)
 	}
 	return fmt.Sprintf("%x", k)
-}
-
-func newrelicMiddleware(app *newrelic.Application) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		fn := func(w http.ResponseWriter, r *http.Request) {
-			txn := app.StartTransaction(r.Method + r.URL.RequestURI())
-			defer txn.End()
-
-			txn.SetWebRequestHTTP(r)
-
-			w = txn.SetWebResponse(w)
-			r = newrelic.RequestWithTransactionContext(r, txn)
-
-			next.ServeHTTP(w, r)
-
-		}
-
-		return http.HandlerFunc(fn)
-	}
 }
