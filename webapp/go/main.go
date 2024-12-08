@@ -15,14 +15,23 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
+	"github.com/newrelic/go-agent/v3/newrelic"
 )
 
 var db *sqlx.DB
+var app *newrelic.Application
 
 func main() {
 	mux := setup()
 	slog.Info("Listening on :8080")
 	http.ListenAndServe(":8080", mux)
+
+	app, _ = newrelic.NewApplication(
+		newrelic.ConfigAppName("isuride-go"),
+		newrelic.ConfigLicense("4dbee0767e0ea7111b4b88478b8686bfFFFFNRAL"),
+		newrelic.ConfigDistributedTracerEnabled(true),
+		newrelic.ConfigAppLogForwardingEnabled(true),
+	)
 }
 
 func setup() http.Handler {
@@ -68,6 +77,7 @@ func setup() http.Handler {
 	mux := chi.NewRouter()
 	mux.Use(middleware.Logger)
 	mux.Use(middleware.Recoverer)
+	mux.Use(newrelicMiddleware(app))
 	mux.HandleFunc("POST /api/initialize", postInitialize)
 
 	// app handlers
@@ -181,4 +191,23 @@ func secureRandomStr(b int) string {
 		panic(err)
 	}
 	return fmt.Sprintf("%x", k)
+}
+
+func newrelicMiddleware(app *newrelic.Application) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		fn := func(w http.ResponseWriter, r *http.Request) {
+			txn := app.StartTransaction(r.Method + r.URL.RequestURI())
+			defer txn.End()
+
+			txn.SetWebRequestHTTP(r)
+
+			w = txn.SetWebResponse(w)
+			r = newrelic.RequestWithTransactionContext(r, txn)
+
+			next.ServeHTTP(w, r)
+
+		}
+
+		return http.HandlerFunc(fn)
+	}
 }
