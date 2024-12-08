@@ -942,11 +942,8 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 			AND (
 				rl.status IS NULL OR rl.status = 'COMPLETED'
 			)
-			AND ST_Distance_Sphere(
-				POINT(cl.longitude, cl.latitude), 
-				POINT(?, ?)
-			) <= ?
-	`, coordinate.Longitude, coordinate.Latitude, distance)
+			AND (ABS(cl.latitude - ?) + ABS(cl.longitude - ?)) <= ?
+	`, coordinate.Latitude, coordinate.Longitude, distance)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
